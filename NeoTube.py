@@ -2,12 +2,17 @@ import sys
 import os
 import yt_dlp
 import webbrowser
+import re
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QTextEdit,
     QPushButton, QProgressBar, QFileDialog, QHBoxLayout
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 from plyer import notification
+
+def sanitize_filename(name):
+    # Windows için geçersiz karakterleri temizle
+    return re.sub(r'[<>:"/\\|?*]', '-', name)
 
 class DownloadThread(QThread):
     update_progress = pyqtSignal(int)
@@ -32,7 +37,8 @@ class DownloadThread(QThread):
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                return info.get('title', 'İndirilenler')
+                title = info.get('title', 'İndirilenler')
+                return sanitize_filename(title)  # 🔥 Temizlenmiş klasör adı
         except Exception:
             return 'İndirilenler'
 
