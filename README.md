@@ -47,8 +47,7 @@ python NeoTube.py
 
 ## 📷 NeoTube Arayüz
 
-<img width="701" height="630" alt="Ekran görüntüsü 2025-07-12 175703" src="https://github.com/user-attachments/assets/ebe266d8-9059-48a9-bed7-fdd3860a35f9" />
-
+<img width="1195" height="784" alt="Yeni NeoTube Arayüz" src="https://github.com/user-attachments/assets/2839bd88-106d-40b0-bfd4-0f6646f1b42a" />
 
 
 ## 📂 Klasör Yapısı
