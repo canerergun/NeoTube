@@ -1,0 +1,9 @@
+<<<<<<< HEAD
+customtkinter>=5.2.0
+yt-dlp>=2023.12.30
+plyer>=2.1.0
+=======
+yt-dlp
+PyQt5
+plyer
+>>>>>>> dd538265985add7d22a91984fb250f6e98cb53fc
