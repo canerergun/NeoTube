@@ -11,8 +11,9 @@
 ║   ██║ ╚████║███████╗╚██████╔╝   ██║   ╚██████╔╝██████╔╝███████╗             ║
 ║   ╚═╝  ╚═══╝╚══════╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═════╝ ╚══════╝             ║
 ║                                                                               ║
-║   🚀 NeoTube Pro v9.0 – Ultimate Video Downloader & Converter                ║
+║   🚀 NeoTube Pro v10.0 – Ultimate Video Downloader & Converter               ║
 ║   🎨 Modern Arayüz | 📋 Kuyruk | ⏸️ Duraklat | 🎵 Format Seçimi              ║
+║   ✅ Tek Uzantı | 🧹 Otomatik Temizlik | 🌐 Proxy | ⏱️ Hız Limiti           ║
 ║                                                                               ║
 ║   📌 Geliştirici: Caner Ergün                                                ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
@@ -122,7 +123,7 @@ from yt_dlp.utils import DownloadCancelled
 # ============================================================
 # 3. SABİTLER
 # ============================================================
-VERSION = "v9.0.0"
+VERSION = "v10.0.0"
 APP_NAME = "NeoTube Pro"
 AUTHOR = "Caner Ergün"
 DEFAULT_DOWNLOAD_PATH = os.path.join(os.path.expanduser("~"), "Downloads", "NeoTube")
@@ -300,6 +301,11 @@ def get_random_user_agent() -> str:
     return random.choice(agents)
 
 
+def strip_extension(template: str) -> str:
+    """Şablonun sonundaki uzantıyı temizler (.mp3, .mp4 vb.)"""
+    return re.sub(r'\.(mp3|mp4|mkv|webm|m4a|flac|wav|aac|ogg|opus|wma)$', '', template, flags=re.IGNORECASE)
+
+
 # ============================================================
 # 6. TEMİZLEYİCİ
 # ============================================================
@@ -344,12 +350,10 @@ class TempCleaner:
 class FFmpegManager:
     @staticmethod
     def find_system_ffmpeg() -> Optional[str]:
-        # 1. PATH'te ara
         path = shutil.which('ffmpeg')
         if path:
             return path
 
-        # 2. Yaygın klasörler
         common = [
             r"C:\ffmpeg\bin\ffmpeg.exe",
             r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
@@ -362,18 +366,15 @@ class FFmpegManager:
 
     @staticmethod
     def get_ffmpeg_path() -> Optional[str]:
-        # 1. Uygulama klasörü
         base_dir = os.path.dirname(os.path.abspath(__file__))
         local_exe = os.path.join(base_dir, "ffmpeg", "bin", "ffmpeg.exe")
         if os.path.exists(local_exe):
             return local_exe
 
-        # 2. Sistem PATH
         system_path = FFmpegManager.find_system_ffmpeg()
         if system_path:
             return system_path
 
-        # 3. İndirmeyi dene
         if platform.system() != "Windows":
             return None
 
@@ -558,23 +559,19 @@ class DownloadThread(threading.Thread):
         self.file_template = file_template
         self.embed_thumbnail = embed_thumbnail
 
-        # Çıktı formatı ses mi?
         self.is_audio_output = self.out_format in AUDIO_CODECS
         self.concurrent = 1 if self.is_audio_output else (concurrent if ffmpeg else 1)
 
-        # Kontrol
         self._pause = False
         self._stop = False
         self._pause_event = threading.Event()
         self._pause_event.set()
 
-        # İstatistik
         self.total = len(self.urls)
         self.completed_count = 0
         self.error_count = 0
         self.skipped_count = 0
 
-        # Callbacks
         self.cb_bar = None
         self.cb_speed = None
         self.cb_status = None
@@ -674,6 +671,17 @@ class DownloadThread(threading.Thread):
 
         return opts
 
+    def _get_template(self) -> str:
+        """Dosya adı şablonunu hazırla (uzantısız)."""
+        template = self.file_template
+        template = template.replace("{title}", "%(title)s")
+        template = template.replace("{channel}", "%(uploader)s")
+        template = template.replace("{date}", "%(upload_date)s")
+        template = template.replace("{id}", "%(id)s")
+        # Sonundaki uzantıyı temizle (kullanıcı .mp3 vs yazmış olabilir)
+        template = strip_extension(template)
+        return template
+
     def _manual_convert(self, raw_path: str, target_fmt: str) -> Optional[str]:
         """Post-processor başarısız olursa manuel ffmpeg dönüşümü."""
         if not self.ffmpeg or not os.path.isfile(self.ffmpeg):
@@ -681,7 +689,15 @@ class DownloadThread(threading.Thread):
         if not os.path.exists(raw_path):
             return None
 
+        # ✅ Zaten hedef formattaysa dokunma
+        if raw_path.lower().endswith(f".{target_fmt.lower()}"):
+            return raw_path
+
         base = os.path.splitext(raw_path)[0]
+        # ✅ Base'in sonunda zaten hedef uzantı varsa temizle (çift uzantı önleme)
+        if base.lower().endswith(f".{target_fmt.lower()}"):
+            base = base[:-(len(target_fmt) + 1)]
+
         target = f"{base}.{target_fmt}"
 
         if os.path.exists(target):
@@ -702,19 +718,33 @@ class DownloadThread(threading.Thread):
             print(f"Manuel dönüşüm hatası: {e}")
         return None
 
-    def _build_template(self, ext_placeholder: str) -> str:
-        template = self.file_template
-        template = template.replace("{title}", "%(title)s")
-        template = template.replace("{channel}", "%(uploader)s")
-        template = template.replace("{date}", "%(upload_date)s")
-        template = template.replace("{id}", "%(id)s")
-        return template + ext_placeholder
+    def _find_output_file(self, folder: str, title: str, out_fmt: str) -> str:
+        """İndirme sonrası oluşan dosyayı bulur."""
+        safe = sanitize_filename(title)
+        # Hedef dosyayı ara
+        for f in os.listdir(folder):
+            f_lower = f.lower()
+            # Başlık eşleşmesi
+            if safe[:50].lower() in f_lower or f.startswith(safe[:50]):
+                if out_fmt in AUDIO_CODECS:
+                    # Ses formatında mı?
+                    if f_lower.endswith(f".{out_fmt}"):
+                        return os.path.join(folder, f)
+                else:
+                    # Video
+                    if f_lower.endswith(f".{out_fmt}"):
+                        return os.path.join(folder, f)
+                    if out_fmt == "mp4" and (f_lower.endswith(".mp4") or f_lower.endswith(".mkv") or f_lower.endswith(".webm")):
+                        return os.path.join(folder, f)
+        return ""
 
     def run(self):
         if not self.urls:
             if self.cb_done:
                 self.cb_done()
             return
+
+        template = self._get_template()
 
         for i, url in enumerate(self.urls, start=1):
             if self._stop:
@@ -748,7 +778,6 @@ class DownloadThread(threading.Thread):
             if self.is_audio_output:
                 # SES ÇIKTISI
                 audio_fmt = out_fmt
-                # Kaliteden bit rate
                 if quality == "MP3 (320k)":
                     q_val = "320"
                 elif quality == "MP3 (128k)":
@@ -774,30 +803,27 @@ class DownloadThread(threading.Thread):
                 if self.embed_thumbnail:
                     post_processors.append({'key': 'EmbedThumbnail'})
 
-                template = self._build_template(f".{audio_fmt}")
-                outtmpl = os.path.join(folder, template)
+                # ✅ KRİTİK: outtmpl'de sabit uzantı YOK, sadece %(ext)s
+                # yt-dlp kendi dönüşümü sonrası doğru uzantıyı koyar
+                outtmpl = os.path.join(folder, template + ".%(ext)s")
 
             else:
                 # VİDEO ÇIKTISI
                 if out_fmt == "mkv":
                     selector = "bestvideo+bestaudio/best"
-                    merge_fmt = "mkv"
                 elif out_fmt == "webm":
                     selector = "bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]"
-                    merge_fmt = "webm"
                 else:  # mp4
                     selector = FORMAT_MAP.get(quality, FORMAT_MAP["best"])
-                    merge_fmt = "mp4"
 
                 post_processors = []
                 if self.embed_thumbnail:
                     post_processors.append({'key': 'EmbedThumbnail'})
                     post_processors.append({'key': 'FFmpegMetadata', 'add_metadata': True})
 
-                template = self._build_template(".%(ext)s")
-                outtmpl = os.path.join(folder, template)
+                outtmpl = os.path.join(folder, template + ".%(ext)s")
 
-            # İNDİR
+            # ============ İNDİR ============
             try:
                 opts = self._build_opts(outtmpl, selector, post_processors)
 
@@ -807,22 +833,52 @@ class DownloadThread(threading.Thread):
                 if not info or self._stop:
                     continue
 
-                # Dosya yolu
+                # ============ DOSYA YOLUNU BUL ============
                 real_path = ""
                 try:
                     raw_path = ydl.prepare_filename(info)
                     if self.is_audio_output:
+                        # yt-dlp post-processor sonrası dosya adı .mp3 oldu
                         base = os.path.splitext(raw_path)[0]
+                        # Çift uzantıyı temizle (base sonu .mp3 ise)
+                        base = strip_extension(base)
                         target = f"{base}.{out_fmt}"
+
                         if os.path.exists(target):
                             real_path = target
                         elif os.path.exists(raw_path):
-                            converted = self._manual_convert(raw_path, out_fmt)
-                            real_path = converted if converted else raw_path
+                            # Farklı isim olabilir → klasörde ara
+                            found = self._find_output_file(folder, info.get('title', clean), out_fmt)
+                            if found:
+                                real_path = found
+                            else:
+                                converted = self._manual_convert(raw_path, out_fmt)
+                                real_path = converted if converted else raw_path
+                        else:
+                            # Klasörde ara
+                            found = self._find_output_file(folder, info.get('title', clean), out_fmt)
+                            if found:
+                                real_path = found
                     else:
-                        real_path = raw_path
-                except Exception:
-                    pass
+                        # Video — uzantı ne olursa olsun bul
+                        if os.path.exists(raw_path):
+                            real_path = raw_path
+                        else:
+                            real_path = self._find_output_file(folder, info.get('title', clean), out_fmt)
+                except Exception as e:
+                    print(f"Dosya yolu bulma hatası: {e}")
+
+                # Çift uzantı kontrolü
+                if real_path and self.is_audio_output:
+                    double = f".{out_fmt}.{out_fmt}"
+                    if real_path.lower().endswith(double):
+                        # Yeniden adlandır
+                        new_path = real_path[:-(len(out_fmt) + 1)]
+                        try:
+                            os.rename(real_path, new_path)
+                            real_path = new_path
+                        except Exception:
+                            pass
 
                 item = DownloadItem(
                     url=url,
@@ -928,7 +984,6 @@ class ConverterWindow(ctk.CTkToplevel):
         )
         self.ffmpeg_lbl.pack(side="right")
 
-        # Kaynak
         src_card = ctk.CTkFrame(
             self, fg_color=self.theme["bg_card"],
             corner_radius=16, border_width=1, border_color=self.theme["border"]
@@ -951,7 +1006,6 @@ class ConverterWindow(ctk.CTkToplevel):
         self._btn(btn_box, "📂 Klasör", self._add_folder, "secondary", 100).pack(side="left", padx=3)
         self._btn(btn_box, "🗑️ Temizle", self._clear, "danger", 90).pack(side="left", padx=3)
 
-        # Format
         fmt_card = ctk.CTkFrame(
             self, fg_color=self.theme["bg_card"],
             corner_radius=16, border_width=1, border_color=self.theme["border"]
@@ -992,7 +1046,6 @@ class ConverterWindow(ctk.CTkToplevel):
 
         self._btn(fmt_inner, "📁 Seç", self._pick_out, "secondary", 80).pack(side="right")
 
-        # Liste
         list_card = ctk.CTkFrame(
             self, fg_color=self.theme["bg_card"],
             corner_radius=16, border_width=1, border_color=self.theme["border"]
@@ -1010,7 +1063,6 @@ class ConverterWindow(ctk.CTkToplevel):
         self.listbox = ctk.CTkScrollableFrame(list_card, fg_color="transparent")
         self.listbox.grid(row=1, column=0, padx=15, pady=(0, 15), sticky="nsew")
 
-        # Alt
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.grid(row=5, column=0, padx=25, pady=(10, 20), sticky="ew")
         bottom.grid_columnconfigure(0, weight=1)
@@ -1147,6 +1199,8 @@ class ConverterWindow(ctk.CTkToplevel):
             ))
 
             base = os.path.splitext(os.path.basename(path))[0]
+            # Çift uzantı temizle
+            base = strip_extension(base)
             target_dir = self.out_dir or os.path.dirname(path)
             out_path = os.path.join(target_dir, f"{base}.{fmt}")
 
@@ -1165,9 +1219,6 @@ class ConverterWindow(ctk.CTkToplevel):
                         text="✅ tamam", fg_color=("#10B981", "#059669")
                     ))
                 else:
-                    err_raw = result.stderr or "FFmpeg hatası"
-                    if isinstance(err_raw, bytes):
-                        err_raw = err_raw.decode('utf-8', errors='replace')
                     self.after(0, lambda s=slbl: s.configure(
                         text="❌ hata", fg_color=("#EF4444", "#DC2626")
                     ))
@@ -1484,7 +1535,6 @@ class NeoTubeApp(ctk.CTk):
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
 
-        # Logo
         logo_box = ctk.CTkFrame(self.sidebar, fg_color="transparent", height=110)
         logo_box.pack(fill="x", padx=15, pady=(25, 15))
         logo_box.pack_propagate(False)
@@ -1502,7 +1552,6 @@ class NeoTubeApp(ctk.CTk):
             text_color=self.theme["accent"]
         ).place(relx=0.5, rely=0.5, anchor="center")
 
-        # Navigasyon
         nav = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         nav.pack(fill="x", padx=18, pady=10)
 
@@ -1529,7 +1578,6 @@ class NeoTubeApp(ctk.CTk):
             btn.pack(pady=6)
             self.nav_buttons[pid] = btn
 
-        # Alt
         bottom = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         bottom.pack(side="bottom", fill="x", padx=18, pady=25)
 
@@ -1728,7 +1776,6 @@ class NeoTubeApp(ctk.CTk):
         )
         self.url_count_lbl.pack(side="right")
 
-        # Resolving
         self.resolve_frame = ctk.CTkFrame(url_card, fg_color="transparent")
         self.resolve_frame.pack(fill="x", padx=28, pady=(0, 18))
         self.resolve_frame.pack_forget()
@@ -1827,7 +1874,6 @@ class NeoTubeApp(ctk.CTk):
         opt_grid = ctk.CTkFrame(opt_inner, fg_color="transparent")
         opt_grid.pack(fill="x", pady=(18, 0))
 
-        # Kalite
         q_box = ctk.CTkFrame(opt_grid, fg_color="transparent")
         q_box.pack(side="left", padx=(0, 22))
 
@@ -1849,7 +1895,6 @@ class NeoTubeApp(ctk.CTk):
             corner_radius=12,
         ).pack(pady=(6, 0))
 
-        # FORMAT SEÇİMİ
         f_box = ctk.CTkFrame(opt_grid, fg_color="transparent")
         f_box.pack(side="left", padx=(0, 22))
 
@@ -1870,7 +1915,6 @@ class NeoTubeApp(ctk.CTk):
             corner_radius=12,
         ).pack(pady=(6, 0))
 
-        # Altyazı
         s_box = ctk.CTkFrame(opt_grid, fg_color="transparent")
         s_box.pack(side="left", padx=(0, 22))
 
@@ -1890,7 +1934,6 @@ class NeoTubeApp(ctk.CTk):
             corner_radius=6
         ).pack(pady=(14, 0))
 
-        # Küçük resim
         t_box = ctk.CTkFrame(opt_grid, fg_color="transparent")
         t_box.pack(side="left", padx=(0, 22))
 
@@ -2227,9 +2270,11 @@ class NeoTubeApp(ctk.CTk):
         ).pack(anchor="w", pady=(0, 10))
 
         ctk.CTkLabel(
-            i4, text="Değişkenler: {title}  {channel}  {date}  {id}",
+            i4, text="Değişkenler: {title}  {channel}  {date}  {id}\n"
+                     "NOT: Uzantı yazma (.mp3, .mp4 vb.) — otomatik eklenir",
             font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=self.theme["text_muted"]
+            text_color=self.theme["text_muted"],
+            justify="left"
         ).pack(anchor="w", pady=(0, 8))
 
         ctk.CTkEntry(
@@ -2913,7 +2958,6 @@ class NeoTubeApp(ctk.CTk):
         self.format_var.set(first.format)
         self.resolved_urls = urls
 
-        # Kuyruktaki title'ları url_titles'a ekle
         for q in self.queue:
             if q.url not in self.url_titles:
                 self.url_titles[q.url] = q.title
